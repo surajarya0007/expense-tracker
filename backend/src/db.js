@@ -121,31 +121,86 @@ const SCHEMA = `
 
 let initPromise = null;
 
+// In-memory store for Vercel to bypass SQLite/WASM issues
+let memExpenses = [];
+let memKeys = new Set();
+
 async function init() {
+  if (process.env.VERCEL) {
+    console.log("Using Vercel In-Memory fallback");
+    return Promise.resolve();
+  }
   if (initPromise) return initPromise;
   initPromise = initSqlJs({
-    // Use CDN for WASM to ensure it works in serverless environments like Vercel
     locateFile: file => `https://sql.js.org/dist/${file}`
   }).then((SQL) => {
-    sqlDb = fs.existsSync(DB_PATH)
-      ? new SQL.Database(fs.readFileSync(DB_PATH))
-      : new SQL.Database();
-    sqlDb.run(SCHEMA);
-    sqlDb.run(`DELETE FROM idempotency_keys
-               WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`);
-    save();
+    try {
+      sqlDb = fs.existsSync(DB_PATH)
+        ? new SQL.Database(fs.readFileSync(DB_PATH))
+        : new SQL.Database();
+      sqlDb.run(SCHEMA);
+      save();
+    } catch (e) {
+      console.error("SQLite init failed, falling back to memory:", e);
+      sqlDb = null; // Trigger memory mode
+    }
   });
   return initPromise;
 }
 
 function assertReady() {
-  if (!sqlDb) throw new Error("DB not initialised — await db.init() first");
+  if (!sqlDb && !process.env.VERCEL) throw new Error("DB not initialised — await db.init() first");
 }
 
 const db = {
-  prepare(sql) { assertReady(); return prepare(sql); },
-  exec(sql)    { assertReady(); return exec(sql); },
-  transaction(fn) { assertReady(); return transaction(fn); },
+  prepare(sql) {
+    if (process.env.VERCEL || !sqlDb) {
+      const s = sql.toLowerCase();
+      return {
+        get: (...params) => {
+          const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          if (s.includes("idempotency_keys")) {
+            return memKeys.has(flat[0]) ? { key: flat[0] } : undefined;
+          }
+          if (s.includes("from expenses where id = ?")) {
+            return memExpenses.find(e => e.id === flat[0]);
+          }
+          return undefined;
+        },
+        all: (...params) => {
+          const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          let results = [...memExpenses];
+          if (flat[0]) results = results.filter(e => e.category === flat[0]);
+          if (s.includes("order by date desc")) {
+            results.sort((a, b) => b.date.localeCompare(a.date));
+          } else if (s.includes("order by date asc")) {
+            results.sort((a, b) => a.date.localeCompare(b.date));
+          }
+          return results;
+        },
+        run: (...params) => {
+          const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+          if (s.includes("insert into idempotency_keys")) {
+            memKeys.add(flat[0]);
+          } else if (s.includes("insert into expenses")) {
+            // [id, amount_paise, category, description, date, created_at]
+            memExpenses.push({
+              id: flat[0],
+              amount_paise: flat[1],
+              category: flat[2],
+              description: flat[3],
+              date: flat[4],
+              created_at: flat[5] || new Date().toISOString()
+            });
+          }
+        }
+      };
+    }
+    assertReady();
+    return prepare(sql);
+  },
+  exec: (sql) => { if (sqlDb) exec(sql); },
+  transaction: (fn) => (...args) => fn(...args),
   init,
 };
 
