@@ -123,7 +123,10 @@ let initPromise = null;
 
 async function init() {
   if (initPromise) return initPromise;
-  initPromise = initSqlJs().then((SQL) => {
+  initPromise = initSqlJs({
+    // Use CDN for WASM to ensure it works in serverless environments like Vercel
+    locateFile: file => `https://sql.js.org/dist/${file}`
+  }).then((SQL) => {
     sqlDb = fs.existsSync(DB_PATH)
       ? new SQL.Database(fs.readFileSync(DB_PATH))
       : new SQL.Database();
