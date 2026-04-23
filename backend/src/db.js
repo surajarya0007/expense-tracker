@@ -14,7 +14,9 @@ const initSqlJs = require("sql.js");
 const fs = require("fs");
 const path = require("path");
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "expenses.db");
+const DB_PATH = process.env.VERCEL 
+  ? path.join("/tmp", "expenses.db")
+  : (process.env.DB_PATH || path.join(__dirname, "..", "expenses.db"));
 
 let sqlDb = null;
 let inTransaction = 0;

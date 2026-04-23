@@ -2,9 +2,15 @@
   "name": "expense-tracker",
   "private": true,
   "scripts": {
+    "build": "cd frontend && npm install && npm run build",
     "dev:api": "cd backend && npm run dev",
     "dev:ui": "cd frontend && npm run dev",
     "install:all": "cd backend && npm install && cd ../frontend && npm install",
     "test": "cd backend && npm test"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
+    "sql.js": "^1.14.1"
   }
 }
